@@ -1,0 +1,18 @@
+[project]
+name = "backend"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "ddgs>=9.10.0",
+    "fastapi>=0.133.0",
+    "litellm>=1.81.15",
+    "pydantic-ai-slim[duckduckgo]>=1.63.0",
+    "pydantic-ai[duckduckgo]>=1.63.0",
+    "pypdf>=6.7.3",
+    "python-dotenv>=1.2.1",
+    "python-multipart>=0.0.22",
+    "sse-starlette>=3.2.0",
+    "uvicorn>=0.41.0",
+]
