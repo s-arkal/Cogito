@@ -1,27 +1,28 @@
+"use client";
+
+import { useState } from "react";
 import { ChatSidebar } from "@/components/domain/ChatSidebar";
 import { Workspace } from "@/components/domain/Workspace";
-import {
-  ResizableHandle,
-  ResizablePanel,
-  ResizablePanelGroup,
-} from "@/components/ui/resizable";
 
 export default function Home() {
+  const [activeSessionId, setActiveSessionId] = useState<string>("");
+
   return (
-    <div className="h-screen w-screen bg-background overflow-hidden">
-      <ResizablePanelGroup orientation="horizontal" className="h-full w-full">
-        
-        <ResizablePanel defaultSize={35} minSize={20}>
-          <ChatSidebar />
-        </ResizablePanel>
+    <main className="flex h-screen w-screen overflow-hidden bg-background">
+      
+      {/* LEFT: The Chat & History - Locked to 45% width so it doesn't crush the workspace */}
+      <div className="w-[45%] min-w-[400px] flex shrink-0 border-r">
+        <ChatSidebar 
+          activeSessionId={activeSessionId} 
+          setActiveSessionId={setActiveSessionId} 
+        />
+      </div>
 
-        <ResizableHandle withHandle className="w-1.5 bg-border hover:bg-primary/30 transition-colors" />
+      {/* RIGHT: The PDF & Editor Workspace - Takes up all remaining space */}
+      <div className="flex-1 flex flex-col min-w-0 bg-muted/5">
+        <Workspace activeSessionId={activeSessionId} />
+      </div>
 
-        <ResizablePanel defaultSize={65}>
-          <Workspace />
-        </ResizablePanel>
-
-      </ResizablePanelGroup>
-    </div>
+    </main>
   );
 }

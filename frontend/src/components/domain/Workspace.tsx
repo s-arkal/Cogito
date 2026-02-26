@@ -1,168 +1,182 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useEffect, useCallback } from "react";
+import { Button } from "@/components/ui/button";
+import { FileText, Upload, Loader2, BookOpen, PenTool, Save, Download } from "lucide-react";
+import { toast } from "sonner";
 import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
-import "katex/dist/katex.min.css"; 
+import "katex/dist/katex.min.css";
 
-import { Button } from "@/components/ui/button";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Textarea } from "@/components/ui/textarea";
-import { ScrollArea } from "@/components/ui/scroll-area";
-import { FileDown, UploadCloud, FileText } from "lucide-react"; 
+interface WorkspaceProps {
+  activeSessionId: string;
+}
 
-export function Workspace() {
-  const [docCode, setDocCode] = useState(
-    "### Introduction to DeepCite\n\nDeepCite allows you to mix standard text with **LaTeX** equations seamlessly.\n\n#### The Schrodinger Equation\n\n$$ i\\hbar \\frac{\\partial}{\\partial t} \\Psi(\\mathbf{r},t) = \\left[ \\frac{-\\hbar^2}{2m}\\nabla^2 + V(\\mathbf{r},t) \\right] \\Psi(\\mathbf{r},t) $$\n\nYou can also write inline math like $E = mc^2$ without breaking the paragraph."
-  );
+interface DocMeta {
+  id: number;
+  filename: string;
+}
 
-  const [uploadedFile, setUploadedFile] = useState<string | null>(null);
-  const [pdfUrl, setPdfUrl] = useState<string | null>(null); 
+export function Workspace({ activeSessionId }: WorkspaceProps) {
   const [isUploading, setIsUploading] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [documents, setDocuments] = useState<DocMeta[]>([]);
+  const [selectedPdf, setSelectedPdf] = useState<string | null>(null);
+  const [editorText, setEditorText] = useState("");
+  const [isSaving, setIsSaving] = useState(false);
+
+
+useEffect(() => {
+    if (!activeSessionId) return;
+    
+    const loadWorkspace = async () => {
+      setSelectedPdf(null); 
+      setDocuments([]);
+
+      try {
+        const docRes = await fetch(`http://127.0.0.1:8000/api/sessions/${activeSessionId}/documents`);
+        const docs = await docRes.json();
+        setDocuments(docs);
+      
+        if (docs.length > 0) {
+          setSelectedPdf(docs[0].filename);
+        }
+
+        const sessRes = await fetch(`http://127.0.0.1:8000/api/sessions`);
+        const sessions = await sessRes.json();
+        const current = sessions.find((s: any) => s.id.toString() === activeSessionId);
+        if (current) setEditorText(current.notes || "");
+      } catch (e) {
+        console.error("Failed to load workspace data");
+      }
+    };
+    loadWorkspace();
+  }, [activeSessionId]);
+
+  useEffect(() => {
+    if (!activeSessionId || !editorText) return;
+
+    const delayDebounceFn = setTimeout(async () => {
+      setIsSaving(true);
+      try {
+        await fetch(`http://127.0.0.1:8000/api/sessions/${activeSessionId}/notes`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ notes: editorText }),
+        });
+      } catch (e) {
+        console.error("Auto-save failed");
+      } finally {
+        setIsSaving(false);
+      }
+    }, 1000); 
+
+    return () => clearTimeout(delayDebounceFn);
+  }, [editorText, activeSessionId]);
+
+  const downloadNotes = () => {
+    const element = document.createElement("a");
+    const file = new Blob([editorText], { type: "text/markdown" });
+    element.href = URL.createObjectURL(file);
+    element.download = `DeepCite_Notes_${activeSessionId}.md`;
+    document.body.appendChild(element);
+    element.click();
+  };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    setIsUploading(true);
+    if (!activeSessionId || !e.target.files?.[0]) return;
+    
+    const file = e.target.files[0];
     const formData = new FormData();
     formData.append("file", file);
+    formData.append("session_id", activeSessionId);
 
+    setIsUploading(true);
     try {
-      const response = await fetch("http://127.0.0.1:8000/api/upload", {
-        method: "POST",
-        body: formData,
-      });
-
-      const data = await response.json();
+      const res = await fetch("http://127.0.0.1:8000/api/upload", { method: "POST", body: formData });
+      const data = await res.json();
       if (data.success) {
-        setUploadedFile(data.filename);
-      
-        const fileUrl = URL.createObjectURL(file);
-        setPdfUrl(fileUrl);
-      } else {
-        alert("Failed to read PDF. Make sure it is a valid document and not an HTML link: " + data.error);
+        setDocuments(prev => [...prev, { id: Date.now(), filename: data.filename }]);
+        setSelectedPdf(data.filename);
+        toast.success("Document added to library");
       }
     } catch (error) {
-      alert("Network error uploading PDF.");
+      toast.error("Upload failed");
     } finally {
       setIsUploading(false);
-      if (fileInputRef.current) fileInputRef.current.value = ""; 
     }
   };
 
   return (
-    <div className="flex-1 flex flex-col h-full bg-background relative">
+    <div className="flex h-full w-full bg-background relative overflow-hidden">
+      {!activeSessionId && (
+        <div className="absolute inset-0 z-50 bg-background/60 backdrop-blur-sm flex items-center justify-center">
+          <div className="bg-background border shadow-2xl rounded-2xl p-6 flex flex-col items-center">
+            <BookOpen className="w-10 h-10 text-muted-foreground mb-4 opacity-50" />
+            <h3 className="font-semibold">No Active Session</h3>
+          </div>
+        </div>
+      )}
 
-      <input 
-        type="file" 
-        accept="application/pdf" 
-        className="hidden" 
-        ref={fileInputRef} 
-        onChange={handleFileUpload} 
-      />
-      
-      <div className="p-4 border-b flex justify-between items-center bg-background shadow-sm z-10">
-        <h2 className="text-lg font-semibold tracking-tight">Workspace</h2>
-        <div className="flex gap-2">
-          <Button 
-            variant="outline" 
-            size="sm" 
-            className="gap-2"
-            onClick={() => fileInputRef.current?.click()}
-            disabled={isUploading}
-          >
-            {isUploading ? (
-              <span className="animate-pulse">Uploading...</span>
-            ) : (
-              <><UploadCloud className="w-4 h-4" /> Upload PDF</>
-            )}
-          </Button>
-          <Button size="sm" className="gap-2">
-            <FileDown className="w-4 h-4" /> Export Document
-          </Button>
+      <div className="w-1/2 flex flex-col border-r h-full bg-muted/5 min-w-0">
+        <div className="h-[60px] border-b flex items-center justify-between px-4 bg-background shrink-0">
+          <h2 className="text-sm font-semibold flex items-center gap-2 truncate pr-4">
+            <FileText className="w-4 h-4 text-muted-foreground" />
+            Library
+          </h2>
+          <div className="relative">
+            <input type="file" accept=".pdf" onChange={handleFileUpload} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" disabled={isUploading} />
+            <Button variant="outline" size="sm" className="h-8">
+              {isUploading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Upload className="w-3 h-3 mr-2" />}
+              Add PDF
+            </Button>
+          </div>
+        </div>
+
+        <div className="flex gap-2 p-2 border-b bg-muted/30 overflow-x-auto whitespace-nowrap">
+          {documents.map((doc) => (
+            <Button key={doc.id} variant={selectedPdf === doc.filename ? "secondary" : "ghost"} size="sm" className="text-xs h-7" onClick={() => setSelectedPdf(doc.filename)}>
+              {doc.filename}
+            </Button>
+          ))}
+        </div>
+
+        <div className="flex-1 bg-zinc-100">
+          {selectedPdf ? (
+            <iframe src={`http://127.0.0.1:8000/api/sessions/${activeSessionId}/pdf/${selectedPdf}`} className="w-full h-full border-none" />
+          ) : (
+            <div className="flex h-full items-center justify-center text-muted-foreground text-sm">No PDF Selected</div>
+          )}
         </div>
       </div>
 
-      <div className="flex-1 overflow-hidden p-4">
-        <Tabs defaultValue="editor" className="w-full h-full flex flex-col">
-          <TabsList className="grid w-full max-w-md grid-cols-3">
-            <TabsTrigger value="editor">Math & Text Editor</TabsTrigger>
-            <TabsTrigger value="research">Research Report</TabsTrigger>
-            <TabsTrigger value="pdf">PDF Viewer</TabsTrigger>
-          </TabsList>
-
-          <TabsContent value="editor" className="flex-1 mt-4 flex gap-4 h-full overflow-hidden">
-            <div className="flex-1 flex flex-col border rounded-md overflow-hidden bg-muted/10">
-              <div className="bg-muted p-2 border-b text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-                Source Code
-              </div>
-              <Textarea 
-                value={docCode}
-                onChange={(e) => setDocCode(e.target.value)}
-                className="flex-1 font-mono text-sm resize-none border-0 focus-visible:ring-0 p-4 rounded-none bg-transparent"
-                placeholder="Type your markdown and LaTeX math here..."
-              />
+      <div className="w-1/2 flex flex-col h-full bg-background min-w-0">
+        <div className="h-[60px] border-b flex items-center justify-between px-4 bg-background shrink-0">
+          <h2 className="text-sm font-semibold flex items-center gap-2">
+            <PenTool className="w-4 h-4 text-muted-foreground" />
+            Editor
+            {isSaving && <span className="text-[10px] text-muted-foreground animate-pulse ml-2 font-normal">Saving...</span>}
+          </h2>
+          <Button variant="ghost" size="icon" className="h-8 w-8" onClick={downloadNotes}>
+            <Download className="w-4 h-4" />
+          </Button>
+        </div>
+        
+        <div className="flex-1 flex flex-col overflow-hidden">
+          <textarea
+            value={editorText}
+            onChange={(e) => setEditorText(e.target.value)}
+            className="flex-1 p-4 bg-[#1e1e1e] text-gray-300 font-mono text-xs outline-none resize-none"
+            placeholder="Notes go here..."
+          />
+          <div className="flex-1 p-6 overflow-y-auto border-t">
+            <div className="prose prose-sm dark:prose-invert max-w-none">
+              <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
+                {editorText}
+              </ReactMarkdown>
             </div>
-            
-            <div className="flex-1 flex flex-col border rounded-md overflow-hidden bg-background shadow-inner">
-              <div className="bg-muted p-2 border-b text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-                Live Preview
-              </div>
-              <ScrollArea className="flex-1 p-6">
-                <div className="prose prose-sm dark:prose-invert max-w-none">
-                  <ReactMarkdown 
-                    remarkPlugins={[remarkGfm, remarkMath]} 
-                    rehypePlugins={[rehypeKatex]}
-                  >
-                    {docCode}
-                  </ReactMarkdown>
-                </div>
-              </ScrollArea>
-            </div>
-          </TabsContent>
-
-          <TabsContent value="research" className="flex-1 mt-4 border rounded-md bg-card overflow-hidden">
-            <ScrollArea className="h-full p-6 prose dark:prose-invert max-w-none">
-              <h3>Comparative Analysis Report</h3>
-              <p className="text-muted-foreground text-sm mb-4">Generated by DeepCite Research Agent</p>
-              <p>This space will hold your structured multi-document comparisons later.</p>
-            </ScrollArea>
-          </TabsContent>
-
-          <TabsContent value="pdf" className="flex-1 mt-4 border rounded-md bg-muted/20 flex flex-col overflow-hidden">
-            {pdfUrl ? (
-              <div className="flex flex-col h-full w-full">
-                <div className="bg-muted p-2 border-b flex justify-between items-center">
-                  <span className="text-xs font-semibold text-muted-foreground tracking-wider truncate max-w-[70%]" title={uploadedFile || ""}>
-                    {uploadedFile}
-                  </span>
-                  <Button 
-                    variant="ghost" 
-                    size="sm" 
-                    onClick={() => { setPdfUrl(null); setUploadedFile(null); }} 
-                    className="h-6 text-xs px-2"
-                  >
-                    Close PDF
-                  </Button>
-                </div>
-                <iframe src={pdfUrl} className="w-full flex-1 border-0" title="PDF Viewer" />
-              </div>
-            ) : (
-              <div className="flex-1 flex flex-col items-center justify-center text-center space-y-2 text-muted-foreground p-4">
-                <FileText className="w-12 h-12 mx-auto opacity-30 mb-4" />
-                <p>No PDF uploaded yet.</p>
-                <Button variant="link" onClick={() => fileInputRef.current?.click()}>
-                  Select a file from your computer
-                </Button>
-              </div>
-            )}
-          </TabsContent>
-
-        </Tabs>
+          </div>
+        </div>
       </div>
     </div>
   );

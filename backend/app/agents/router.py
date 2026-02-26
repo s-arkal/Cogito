@@ -4,8 +4,15 @@ from pydantic_ai import Agent, RunContext
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.litellm import LiteLLMProvider
 from pydantic_ai.common_tools.duckduckgo import duckduckgo_search_tool
+from app.db import engine, Document
+from sqlmodel import Session, select
+from pydantic_ai import Agent, RunContext
+import chromadb
 
 load_dotenv()
+
+chroma_client = chromadb.PersistentClient(path="./chroma_db")
+vector_collection = chroma_client.get_or_create_collection(name="deepcite_documents")
 
 document_store = {
     "current_pdf_text": "",
@@ -27,6 +34,7 @@ model = OpenAIChatModel(
 router_agent = Agent(
     model=model,
     tools=[duckduckgo_search_tool()],
+    deps_type=int,
     system_prompt=(
         "You are DeepCite, an academic research assistant. "
         "You have access to the live web via DuckDuckGo, and you can read uploaded PDF documents. "
@@ -38,17 +46,21 @@ router_agent = Agent(
 )
 
 @router_agent.tool
-async def read_uploaded_paper(ctx: RunContext[None]) -> str:
-    """
-    Reads the text of the currently uploaded PDF document. 
-    Use this when the user asks you to summarize, analyze, or answer questions about their uploaded paper.
-    """
-    text = document_store.get("current_pdf_text", "")
-    filename = document_store.get("filename", "")
+def search_uploaded_documents(ctx: RunContext[int], query: str) -> str:
+    session_id = ctx.deps
     
-    if not text:
-        return "No document is currently uploaded. Ask the user to upload a PDF first."
+    results = vector_collection.query(
+        query_texts=[query],
+        n_results=3,
+        where={"session_id": session_id}
+    )
     
-    print(f"--- Agent is reading uploaded paper: {filename} ---")
-    
-    return f"Document Filename: {filename}\n\nContent:\n{text[:50000]}"
+    if not results['documents'] or not results['documents'][0]:
+        return "No relevant information found in the uploaded documents for this session."
+        
+    formatted_results = "Here are the most relevant excerpts from the uploaded documents:\n\n"
+    for i, doc_chunk in enumerate(results['documents'][0]):
+        source_file = results['metadatas'][0][i]['filename']
+        formatted_results += f"--- Excerpt from {source_file} ---\n{doc_chunk}\n\n"
+        
+    return formatted_results
