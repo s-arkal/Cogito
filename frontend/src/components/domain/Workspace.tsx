@@ -11,6 +11,7 @@ import { useAuth } from "@/context/AuthContext";
 import ReactMarkdown from "react-markdown";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
+import remarkGfm from "remark-gfm";
 import "katex/dist/katex.min.css";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 
@@ -453,7 +454,21 @@ export function Workspace({ activeProjectId }: WorkspaceProps) {
               />
               <div className="h-[45%] p-6 overflow-y-auto border-t border-white/10 bg-[#111113] shrink-0">
                 <div className="prose prose-sm prose-invert max-w-none prose-pre:bg-black/50 prose-pre:border prose-pre:border-white/10">
-                  <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>{editorText}</ReactMarkdown>
+                  <ReactMarkdown 
+                    remarkPlugins={[remarkMath, remarkGfm]} 
+                    rehypePlugins={[rehypeKatex]}
+                    components={{
+                      table: ({node, ...props}) => (
+                        <div className="overflow-x-auto w-full my-4 rounded-lg border border-white/10 bg-black/20">
+                          <table className="w-full text-sm text-left border-collapse" {...props} />
+                        </div>
+                      ),
+                      th: ({node, ...props}) => <th className="px-4 py-2 font-semibold border-b border-white/10 whitespace-nowrap" {...props} />,
+                      td: ({node, ...props}) => <td className="px-4 py-2 border-b border-white/5 whitespace-nowrap" {...props} />
+                    }}
+                  >
+                    {editorText}
+                  </ReactMarkdown>
                 </div>
               </div>
             </div>

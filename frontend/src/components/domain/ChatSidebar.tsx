@@ -6,6 +6,11 @@ import { Loader2, ArrowLeft } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import { toast } from "sonner";
 import { useRouter } from "next/navigation";
+import ReactMarkdown from "react-markdown";
+import remarkMath from "remark-math";
+import rehypeKatex from "rehype-katex";
+import remarkGfm from "remark-gfm";
+import "katex/dist/katex.min.css";
 
 interface Message {
   id: number;
@@ -64,7 +69,6 @@ export function ChatSidebar({ activeProjectId }: ChatSidebarProps) {
 
       if (!response.body) throw new Error("No response body");
 
-
       setMessages(prev => [...prev, { id: Date.now() + 1, role: "assistant", content: "" }]);
       
       const reader = response.body.getReader();
@@ -82,28 +86,35 @@ export function ChatSidebar({ activeProjectId }: ChatSidebarProps) {
         buffer = lines.pop() || "";
 
         for (const line of lines) {
-          const dataStr = line.replace("data: ", "").trim();
-          if (dataStr) {
-            try {
-              const parsed = JSON.parse(dataStr);
-              
-              if (parsed.type === "text") {
-                setAgentStatus(""); 
-                
-                setMessages(prev => {
-                  const newMsgs = [...prev];
-                  const lastIndex = newMsgs.length - 1;
-                  newMsgs[lastIndex] = { 
-                    ...newMsgs[lastIndex], 
-                    content: newMsgs[lastIndex].content + parsed.data 
-                  };
-                  return newMsgs;
-                });
+          const trimmedLine = line.trim();
+          if (!trimmedLine) continue;
 
-              } else if (parsed.type === "status") {
-                setAgentStatus(parsed.data); 
+          // Bulletproof SSE string extraction to prevent swallowed first words
+          if (trimmedLine.startsWith("data:")) {
+            const dataStr = trimmedLine.slice(5).trim();
+            if (dataStr) {
+              try {
+                const parsed = JSON.parse(dataStr);
+                
+                if (parsed.type === "text") {
+                  setAgentStatus(""); 
+                  
+                  setMessages(prev => {
+                    const newMsgs = [...prev];
+                    const lastIndex = newMsgs.length - 1;
+                    newMsgs[lastIndex] = { 
+                      ...newMsgs[lastIndex], 
+                      content: newMsgs[lastIndex].content + parsed.data 
+                    };
+                    return newMsgs;
+                  });
+
+                } else if (parsed.type === "status") {
+                  setAgentStatus(parsed.data); 
+                }
+              } catch (err) {
+                // Ignore partial JSON parse errors
               }
-            } catch (err) {
             }
           }
         }
@@ -138,7 +149,7 @@ export function ChatSidebar({ activeProjectId }: ChatSidebarProps) {
 
           return (
             <div key={msg.id} className={`flex ${isAssistant ? "justify-start" : "justify-end"}`}>
-              <div className={`max-w-[85%] p-3 rounded-2xl text-sm leading-relaxed ${
+              <div className={`max-w-[90%] p-4 rounded-2xl text-sm leading-relaxed ${
                 isAssistant 
                   ? "bg-white/5 text-gray-200 border border-white/10 shadow-inner" 
                   : "bg-blue-600 text-white shadow-lg"
@@ -149,7 +160,27 @@ export function ChatSidebar({ activeProjectId }: ChatSidebarProps) {
                     <span className="italic font-medium">{agentStatus || "Thinking..."}</span>
                   </div>
                 ) : (
-                  <div className="whitespace-pre-wrap">{msg.content}</div>
+                  <div className={isAssistant ? "prose prose-sm prose-invert max-w-none prose-pre:bg-black/50 prose-pre:border prose-pre:border-white/10" : "whitespace-pre-wrap"}>
+                    {isAssistant ? (
+                      <ReactMarkdown 
+                        remarkPlugins={[remarkMath, remarkGfm]} 
+                        rehypePlugins={[rehypeKatex]}
+                        components={{
+                          table: ({node, ...props}) => (
+                            <div className="overflow-x-auto w-full my-4 rounded-lg border border-white/10 bg-black/20">
+                              <table className="w-full text-sm text-left border-collapse" {...props} />
+                            </div>
+                          ),
+                          th: ({node, ...props}) => <th className="px-4 py-2 font-semibold border-b border-white/10 whitespace-nowrap" {...props} />,
+                          td: ({node, ...props}) => <td className="px-4 py-2 border-b border-white/5 whitespace-nowrap" {...props} />
+                        }}
+                      >
+                        {msg.content}
+                      </ReactMarkdown>
+                    ) : (
+                      msg.content
+                    )}
+                  </div>
                 )}
               </div>
             </div>
