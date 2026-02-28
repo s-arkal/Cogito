@@ -68,8 +68,17 @@ sqlite_url = f"sqlite:///{sqlite_file_name}"
 engine = create_engine(sqlite_url, connect_args={"check_same_thread": False})
 
 def create_db_and_tables():
+    """
+    Create the database and all tables defined in the SQLModel models.
+    """
     SQLModel.metadata.create_all(engine)
 
 def get_session():
+    """
+    Get a database session for dependency injection in FastAPI endpoints.
+    
+    Yields:
+        A SQLModel Session instance
+    """
     with Session(engine) as session:
         yield session

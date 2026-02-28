@@ -29,6 +29,17 @@ chroma_client = chromadb.PersistentClient(path="./chroma_db")
 vector_collection = chroma_client.get_or_create_collection(name="deepcite_vectors")
 
 def chunk_text(text: str, chunk_size: int = 1000, overlap: int = 200):
+    """
+    Split text into overlapping chunks for vector embedding.
+    
+    Args:
+        text: The text to chunk
+        chunk_size: Number of characters per chunk (default: 1000)
+        overlap: Number of overlapping characters between chunks (default: 200)
+    
+    Returns:
+        List of text chunks
+    """
     chunks = []
     start = 0
     while start < len(text):
@@ -92,6 +103,19 @@ class FolderMoveRequest(BaseModel):
 
 @app.post("/api/auth/register")
 def register_user(user_data: UserCreate, db: Session = Depends(get_session)):
+    """
+    Register a new user with email, username, and password.
+    
+    Args:
+        user_data: User registration data (email, password, username)
+        db: Database session
+    
+    Returns:
+        Dictionary with access token and token type
+    
+    Raises:
+        HTTPException: If email or username already exists
+    """
     existing_email = db.exec(select(User).where(User.email == user_data.email)).first()
     if existing_email:
         raise HTTPException(status_code=400, detail="Email already registered")
@@ -116,6 +140,19 @@ def register_user(user_data: UserCreate, db: Session = Depends(get_session)):
 
 @app.post("/api/auth/login", response_model=Token)
 def login_user(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_session)):
+    """
+    Authenticate a user and return an access token.
+    
+    Args:
+        form_data: OAuth2 password request form with username and password
+        db: Database session
+    
+    Returns:
+        Dictionary with access token and token type
+    
+    Raises:
+        HTTPException: If email or password is incorrect
+    """
     user = db.exec(select(User).where(User.email == form_data.username)).first()
     if not user or not verify_password(form_data.password, user.hashed_password):
         raise HTTPException(
@@ -130,6 +167,15 @@ def login_user(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = D
 
 @app.get("/api/users/me")
 def get_user_profile(current_user: User = Depends(get_current_user)):
+    """
+    Get the current authenticated user's profile information.
+    
+    Args:
+        current_user: The authenticated user from JWT token
+    
+    Returns:
+        Dictionary with user id, email, username, and avatar URL
+    """
     return {
         "id": current_user.id,
         "email": current_user.email,
@@ -139,6 +185,20 @@ def get_user_profile(current_user: User = Depends(get_current_user)):
 
 @app.patch("/api/users/me")
 def update_user_profile(request: UserUpdate, db: Session = Depends(get_session), current_user: User = Depends(get_current_user)):
+    """
+    Update the current user's profile username.
+    
+    Args:
+        request: User update data containing new username
+        db: Database session
+        current_user: The authenticated user from JWT token
+    
+    Returns:
+        Dictionary with success status and updated username
+    
+    Raises:
+        HTTPException: If username is already taken
+    """
     existing = db.exec(select(User).where(User.username == request.username)).first()
     if existing and existing.id != current_user.id:
         raise HTTPException(status_code=400, detail="Username already taken")
@@ -151,6 +211,20 @@ def update_user_profile(request: UserUpdate, db: Session = Depends(get_session),
 
 @app.patch("/api/users/me/password")
 def update_user_password(request: PasswordUpdate, db: Session = Depends(get_session), current_user: User = Depends(get_current_user)):
+    """
+    Update the current user's password.
+    
+    Args:
+        request: Password update data with current and new password
+        db: Database session
+        current_user: The authenticated user from JWT token
+    
+    Returns:
+        Dictionary with success status
+    
+    Raises:
+        HTTPException: If current password is incorrect
+    """
     if not verify_password(request.current_password, current_user.hashed_password):
         raise HTTPException(status_code=400, detail="Current password incorrect")
         
@@ -161,6 +235,19 @@ def update_user_password(request: PasswordUpdate, db: Session = Depends(get_sess
 
 @app.delete("/api/users/me")
 def delete_user_account(db: Session = Depends(get_session), current_user: User = Depends(get_current_user)):
+    """
+    Delete the current user account and all associated data.
+    
+    Args:
+        db: Database session
+        current_user: The authenticated user from JWT token
+    
+    Returns:
+        Dictionary with success status
+    
+    Raises:
+        HTTPException: If deletion encounters an error
+    """
     try:
         projects = db.exec(select(Project).where(Project.user_id == current_user.id)).all()
         for proj in projects:
@@ -181,6 +268,18 @@ def delete_user_account(db: Session = Depends(get_session), current_user: User =
 
 @app.post("/api/projects")
 def create_project(db: Session = Depends(get_session), current_user: User = Depends(get_current_user)):
+    """
+    Create a new research project for the current user.
+    
+    Also initializes default folders (Literature Review, Datasets, Drafts).
+    
+    Args:
+        db: Database session
+        current_user: The authenticated user from JWT token
+    
+    Returns:
+        The newly created Project object
+    """
     new_project = Project(title="New Research Project", user_id=current_user.id)
     db.add(new_project)
     db.commit()
@@ -199,6 +298,16 @@ def create_project(db: Session = Depends(get_session), current_user: User = Depe
 
 @app.get("/api/projects")
 def get_all_projects(db: Session = Depends(get_session), current_user: User = Depends(get_current_user)):
+    """
+    Retrieve all projects belonging to the current user.
+    
+    Args:
+        db: Database session
+        current_user: The authenticated user from JWT token
+    
+    Returns:
+        List of Project objects ordered by creation date (newest first)
+    """
     return db.exec(select(Project).where(Project.user_id == current_user.id).order_by(Project.created_at.desc())).all()
 
 @app.patch("/api/projects/{project_id}")
@@ -208,6 +317,21 @@ def update_project(
     db: Session = Depends(get_session), 
     current_user: User = Depends(get_current_user)
 ):
+    """
+    Update a project's title and/or description.
+    
+    Args:
+        project_id: The ID of the project to update
+        request: Project update data (title and/or description)
+        db: Database session
+        current_user: The authenticated user from JWT token
+    
+    Returns:
+        The updated Project object
+    
+    Raises:
+        HTTPException: If project not found or user is not authorized
+    """
     project = db.get(Project, project_id)
     if not project or project.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Project not found")
@@ -225,6 +349,21 @@ def update_project(
 
 @app.patch("/api/projects/{project_id}/notes")
 def update_project_notes(project_id: int, request: NotesUpdateRequest, db: Session = Depends(get_session), current_user: User = Depends(get_current_user)):
+    """
+    Update the project's research notes.
+    
+    Args:
+        project_id: The ID of the project
+        request: Notes update data
+        db: Database session
+        current_user: The authenticated user from JWT token
+    
+    Returns:
+        Dictionary with success status
+    
+    Raises:
+        HTTPException: If project not found or user is not authorized
+    """
     project = db.get(Project, project_id)
     if not project or project.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Project not found")
@@ -236,6 +375,20 @@ def update_project_notes(project_id: int, request: NotesUpdateRequest, db: Sessi
 
 @app.delete("/api/projects/{project_id}")
 def delete_project(project_id: int, db: Session = Depends(get_session), current_user: User = Depends(get_current_user)):
+    """
+    Delete a project and all associated documents and vectors.
+    
+    Args:
+        project_id: The ID of the project to delete
+        db: Database session
+        current_user: The authenticated user from JWT token
+    
+    Returns:
+        Dictionary with success status
+    
+    Raises:
+        HTTPException: If project not found or user is not authorized
+    """
     project = db.get(Project, project_id)
     if not project or project.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Project not found")
@@ -257,6 +410,21 @@ def delete_project(project_id: int, db: Session = Depends(get_session), current_
 
 @app.post("/api/projects/{project_id}/folders")
 def create_folder(project_id: int, request: FolderCreateRequest, db: Session = Depends(get_session), current_user: User = Depends(get_current_user)):
+    """
+    Create a new folder in a project.
+    
+    Args:
+        project_id: The ID of the project
+        request: Folder creation data with folder name
+        db: Database session
+        current_user: The authenticated user from JWT token
+    
+    Returns:
+        The newly created Folder object
+    
+    Raises:
+        HTTPException: If project not found or user is not authorized
+    """
     project = db.get(Project, project_id)
     if not project or project.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Project not found")
@@ -269,10 +437,40 @@ def create_folder(project_id: int, request: FolderCreateRequest, db: Session = D
 
 @app.get("/api/projects/{project_id}/folders")
 def get_folders(project_id: int, db: Session = Depends(get_session), current_user: User = Depends(get_current_user)):
+    """
+    Retrieve all folders in a project.
+    
+    Args:
+        project_id: The ID of the project
+        db: Database session
+        current_user: The authenticated user from JWT token
+    
+    Returns:
+        List of Folder objects
+    
+    Raises:
+        HTTPException: If user is not authorized to view project
+    """
     return db.exec(select(Folder).where(Folder.project_id == project_id)).all()
 
 @app.patch("/api/projects/{project_id}/folders/{folder_id}")
 def rename_folder(project_id: int, folder_id: int, request: FolderRenameRequest, db: Session = Depends(get_session), current_user: User = Depends(get_current_user)):
+    """
+    Rename a folder.
+    
+    Args:
+        project_id: The ID of the project
+        folder_id: The ID of the folder to rename
+        request: Folder rename data with new name
+        db: Database session
+        current_user: The authenticated user from JWT token
+    
+    Returns:
+        The updated Folder object
+    
+    Raises:
+        HTTPException: If folder not found or user is not authorized
+    """
     folder = db.get(Folder, folder_id)
     if not folder or folder.project.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Folder not found")
@@ -291,6 +489,22 @@ def move_folder(
     db: Session = Depends(get_session), 
     current_user: User = Depends(get_current_user)
 ):
+    """
+    Move a folder to a new parent folder (supports nested folder hierarchies).
+    
+    Args:
+        project_id: The ID of the project
+        folder_id: The ID of the folder to move
+        request: Folder move data with new parent folder ID
+        db: Database session
+        current_user: The authenticated user from JWT token
+    
+    Returns:
+        Dictionary with success status
+    
+    Raises:
+        HTTPException: If folder not found, user not authorized, or trying to move into itself
+    """
     folder = db.get(Folder, folder_id)
     if not folder or folder.project.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Folder not found")
@@ -305,6 +519,23 @@ def move_folder(
 
 @app.delete("/api/projects/{project_id}/folders/{folder_id}")
 def delete_folder(project_id: int, folder_id: int, db: Session = Depends(get_session), current_user: User = Depends(get_current_user)):
+    """
+    Delete a folder from a project.
+    
+    Orphans any documents in the folder without deleting them.
+    
+    Args:
+        project_id: The ID of the project
+        folder_id: The ID of the folder to delete
+        db: Database session
+        current_user: The authenticated user from JWT token
+    
+    Returns:
+        Dictionary with success status
+    
+    Raises:
+        HTTPException: If folder not found or user is not authorized
+    """
     folder = db.get(Folder, folder_id)
     if not folder or folder.project.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Folder not found")
@@ -322,24 +553,38 @@ def delete_folder(project_id: int, folder_id: int, db: Session = Depends(get_ses
 def upload_pdf(
     project_id: int, 
     file: UploadFile = File(...), 
-    folder_id: Optional[int] = Form(None), # <-- THIS IS THE MISSING LINK!
+    folder_id: Optional[int] = Form(None),
     db: Session = Depends(get_session), 
     current_user: User = Depends(get_current_user)
 ):
-    """Uploads a PDF, extracts text, saves to SQLite, and chunks into ChromaDB."""
-    # 1. Verify Project
+    """
+    Upload a PDF file to a project.
+    
+    Extracts text, saves to SQLite database, and chunks into ChromaDB for RAG.
+    
+    Args:
+        project_id: The ID of the project
+        file: The PDF file to upload
+        folder_id: Optional folder ID to place the document in
+        db: Database session
+        current_user: The authenticated user from JWT token
+    
+    Returns:
+        Dictionary with success status, filename, and document ID
+    
+    Raises:
+        HTTPException: If project not found, user not authorized, or PDF extraction fails
+    """
     project = db.get(Project, project_id)
     if not project or project.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Project not found")
 
-    # 2. Save physical file
     safe_filename = file.filename.replace(" ", "_")
     file_path = os.path.join(UPLOAD_DIR, f"proj_{project_id}_{safe_filename}")
     
     with open(file_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
 
-    # 3. Extract Text
     try:
         reader = PdfReader(file_path)
         text = "".join(page.extract_text() for page in reader.pages if page.extract_text())
@@ -352,16 +597,14 @@ def upload_pdf(
         filename=safe_filename, 
         content=text, 
         source="local",
-        uploaded_at=datetime.now(timezone.utc) # <-- THIS FIXES THE CRASH!
+        uploaded_at=datetime.now(timezone.utc) 
     )
     db.add(doc)
     db.commit()
     db.refresh(doc)
 
-    # 5. Chunk and load into ChromaDB (AI visibility)
     chunks = chunk_text(text)
     
-    # Safety check: Only add to Chroma if we actually extracted text!
     if chunks: 
         chunk_ids = [f"doc_proj_{project_id}_{safe_filename}_{i}" for i in range(len(chunks))]
         metadatas = [{"project_id": project_id, "user_id": current_user.id, "filename": safe_filename} for _ in chunks]
@@ -371,6 +614,20 @@ def upload_pdf(
 
 @app.get("/api/projects/{project_id}/documents")
 def get_documents(project_id: int, db: Session = Depends(get_session), current_user: User = Depends(get_current_user)):
+    """
+    Retrieve all documents in a project.
+    
+    Args:
+        project_id: The ID of the project
+        db: Database session
+        current_user: The authenticated user from JWT token
+    
+    Returns:
+        List of Document objects
+    
+    Raises:
+        HTTPException: If user is not authorized to view project
+    """
     project = db.get(Project, project_id)
     if not project or project.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Not authorized")
@@ -378,6 +635,20 @@ def get_documents(project_id: int, db: Session = Depends(get_session), current_u
 
 @app.get("/api/projects/{project_id}/pdf/{filename}")
 def serve_pdf(project_id: int, filename: str, current_user: User = Depends(get_current_user)):
+    """
+    Serve a PDF file for download.
+    
+    Args:
+        project_id: The ID of the project
+        filename: The filename of the PDF to serve
+        current_user: The authenticated user from JWT token
+    
+    Returns:
+        FileResponse with the PDF file
+    
+    Raises:
+        HTTPException: If PDF file not found
+    """
     file_path = os.path.join(UPLOAD_DIR, f"proj_{project_id}_{filename}")
     if os.path.exists(file_path):
         return FileResponse(file_path, media_type="application/pdf")
@@ -391,6 +662,22 @@ def move_document(
     db: Session = Depends(get_session), 
     current_user: User = Depends(get_current_user)
 ):
+    """
+    Move a document to a different folder.
+    
+    Args:
+        project_id: The ID of the project
+        document_id: The ID of the document to move
+        request: Document move data with new folder ID
+        db: Database session
+        current_user: The authenticated user from JWT token
+    
+    Returns:
+        Dictionary with success status
+    
+    Raises:
+        HTTPException: If project or document not found, or user not authorized
+    """
     project = db.get(Project, project_id)
     if not project or project.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Project not found")
@@ -411,6 +698,24 @@ def delete_document(
     db: Session = Depends(get_session), 
     current_user: User = Depends(get_current_user)
 ):
+    """
+    Delete a document from a project.
+    
+    Removes the document from the database, deletes associated vectors from ChromaDB,
+    and removes the PDF file from storage.
+    
+    Args:
+        project_id: The ID of the project
+        document_id: The ID of the document to delete
+        db: Database session
+        current_user: The authenticated user from JWT token
+    
+    Returns:
+        Dictionary with success status
+    
+    Raises:
+        HTTPException: If project/document not found, user not authorized, or deletion fails
+    """
     project = db.get(Project, project_id)
     if not project or project.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Project not found")
@@ -444,27 +749,50 @@ def delete_document(
 
 @app.post("/api/chat")
 async def chat_endpoint(request: ChatRequest, db: Session = Depends(get_session), current_user: User = Depends(get_current_user)):
-    # 1. Verify Project
+    """
+    Handle incoming chat messages from the user and stream AI responses.
+    
+    Passes the user's message to the Router agent along with project context,
+    then streams back the AI's response with variable status updates about
+    what tools it's using (document search, web search, etc.).
+    
+    Args:
+        request: Chat request containing message and project_id
+        db: Database session
+        current_user: The authenticated user from JWT token
+    
+    Returns:
+        StreamingResponse with server-sent events containing status and text data
+    
+    Raises:
+        HTTPException: If project not found or user not authorized
+    """
     project = db.get(Project, request.project_id)
     if not project or project.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Project not found")
 
-    # 2. Build the Dynamic Recursive Folder & File Context Map
     docs = db.exec(select(Document).where(Document.project_id == request.project_id)).all()
     folders = db.exec(select(Folder).where(Folder.project_id == request.project_id)).all()
 
-    # We build a visual tree so the LLM knows EXACTLY where everything is nested
     def build_tree_context(parent_id: int | None, depth: int) -> str:
+        """
+        Recursively build a textual tree representation of the project's folder and file structure.
+        
+        Args:
+            parent_id: The ID of the parent folder. None for root level.
+            depth: Current depth in the tree for indentation level.
+        
+        Returns:
+            Formatted string representing the folder/file tree
+        """
         context = ""
         padding = "    " * depth
         
-        # 1. Find and append folders at this level
         child_folders = [f for f in folders if f.parent_id == parent_id]
         for f in child_folders:
             context += f"{padding}📁 {f.name}/\n"
-            context += build_tree_context(f.id, depth + 1) # Recurse deeper!
+            context += build_tree_context(f.id, depth + 1) 
 
-        # 2. Find and append documents at this level
         child_docs = [d for d in docs if d.folder_id == parent_id]
         for d in child_docs:
             context += f"{padding}📄 {d.filename}\n"
@@ -474,11 +802,9 @@ async def chat_endpoint(request: ChatRequest, db: Session = Depends(get_session)
     file_context = "Project Workspace (Root)/\n"
     file_context += build_tree_context(None, 1)
     
-    # Handle completely empty projects
     if not docs and not folders:
         file_context += "    (Empty Workspace - No folders or files yet)\n"
 
-    # 3. Save User Message
     user_msg = Message(
         project_id=request.project_id, 
         role="user", 
@@ -488,16 +814,20 @@ async def chat_endpoint(request: ChatRequest, db: Session = Depends(get_session)
     db.add(user_msg)
     db.commit()
 
-    # 4. Stream AI Response using LIVE Events
     async def ai_streamer():
+        """
+        Stream AI responses back to the client via Server-Sent Events.
+        
+        Yields JSON-formatted server-sent events containing status updates and
+        streamed response text as the AI generates content.
+        """
         full_response = ""
-        # The agent now gets the PERFECT file tree injected into its brain
-        deps = RouterDeps(project_id=request.project_id, file_context=file_context)
+        current_notes = project.notes or "(The editor is currently empty.)"
+        deps = RouterDeps(project_id=request.project_id, file_context=file_context, current_notes=current_notes)
         
         try:
             yield f"data: {json.dumps({'type': 'status', 'data': 'DeepCite is analyzing project context...'})}\n\n"
             
-            # Catch tool calls live
             if hasattr(router_agent, "run_stream_events"):
                 async for event in router_agent.run_stream_events(request.message, deps=deps):
                     event_name = type(event).__name__
@@ -509,6 +839,16 @@ async def chat_endpoint(request: ChatRequest, db: Session = Depends(get_session)
                                 yield f"data: {json.dumps({'type': 'status', 'data': 'Searching Document Library...'})}\n\n"
                             elif "duckduckgo" in t_name:
                                 yield f"data: {json.dumps({'type': 'status', 'data': 'Searching DuckDuckGo Web...'})}\n\n"
+                            elif t_name == "overwrite_notes":
+                                yield f"data: {json.dumps({'type': 'status', 'data': 'Rewriting Co-Author Notes...'})}\n\n"
+                        
+                        elif hasattr(event, "part") and type(event.part).__name__ == "TextPart":
+                            chunk = getattr(event.part, "content", "")
+                            if chunk:
+                                if not full_response:
+                                    yield f"data: {json.dumps({'type': 'status', 'data': ''})}\n\n"
+                                full_response += chunk
+                                yield f"data: {json.dumps({'type': 'text', 'data': chunk})}\n\n"
                                 
                     elif event_name == "PartDeltaEvent":
                         if hasattr(event, "delta") and type(event.delta).__name__ == "TextPartDelta":
@@ -526,7 +866,6 @@ async def chat_endpoint(request: ChatRequest, db: Session = Depends(get_session)
                         full_response += chunk
                         yield f"data: {json.dumps({'type': 'text', 'data': chunk})}\n\n"
 
-            # Save final message
             assistant_msg = Message(
                 project_id=request.project_id, 
                 role="assistant", 
@@ -544,6 +883,20 @@ async def chat_endpoint(request: ChatRequest, db: Session = Depends(get_session)
 
 @app.get("/api/projects/{project_id}/messages")
 def get_project_messages(project_id: int, db: Session = Depends(get_session), current_user: User = Depends(get_current_user)):
+    """
+    Retrieve all chat messages for a project.
+    
+    Args:
+        project_id: The ID of the project
+        db: Database session
+        current_user: The authenticated user from JWT token
+    
+    Returns:
+        List of Message objects ordered by creation date (oldest first)
+    
+    Raises:
+        HTTPException: If project not found or user not authorized
+    """
     project = db.get(Project, project_id)
     if not project or project.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Project not found")

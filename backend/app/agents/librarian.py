@@ -8,15 +8,12 @@ from pydantic_ai.providers.litellm import LiteLLMProvider
 
 load_dotenv()
 
-# 1. Initialize ChromaDB
 chroma_client = chromadb.PersistentClient(path="./chroma_db")
 vector_collection = chroma_client.get_or_create_collection(name="deepcite_vectors")
 
-# 2. Define the Agent's Dependencies
 class LibrarianDeps(BaseModel):
     project_id: int
 
-# 3. Setup Custom LiteLLM Provider (UFL Endpoint)
 model = OpenAIChatModel(
     'gpt-oss-120b',
     provider=LiteLLMProvider(
@@ -25,7 +22,6 @@ model = OpenAIChatModel(
     )
 )
 
-# 4. Create the Librarian Agent
 librarian_agent = Agent(
     model=model,
     deps_type=LibrarianDeps,
@@ -38,7 +34,6 @@ librarian_agent = Agent(
     )
 )
 
-# 5. The RAG Tool
 @librarian_agent.tool
 def read_uploaded_paper(ctx: RunContext[LibrarianDeps], query: str) -> str:
     """
@@ -48,7 +43,7 @@ def read_uploaded_paper(ctx: RunContext[LibrarianDeps], query: str) -> str:
     try:
         results = vector_collection.query(
             query_texts=[query],
-            n_results=5, # Pull the top 5 most relevant chunks
+            n_results=5, 
             where={"project_id": {"$eq": ctx.deps.project_id}}
         )
         

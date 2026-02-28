@@ -7,16 +7,18 @@ from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.litellm import LiteLLMProvider
 from pydantic_ai.common_tools.duckduckgo import duckduckgo_search_tool
 from app.agents.critic import critic_agent, CriticDeps
+from sqlmodel import Session
+from app.db import engine, Project
 
 load_dotenv()
 
 chroma_client = chromadb.PersistentClient(path="./chroma_db")
 vector_collection = chroma_client.get_or_create_collection(name="deepcite_vectors")
 
-# NEW: We added `file_context` so the agent knows your folder structure
 class RouterDeps(BaseModel):
     project_id: int
-    file_context: str 
+    file_context: str
+    current_notes: str 
 
 model = OpenAIChatModel(
     'gpt-oss-120b',
@@ -41,9 +43,17 @@ router_agent = Agent(
     )
 )
 
-# NEW: This dynamically injects your exact folder and file names into the prompt every time you chat!
 @router_agent.system_prompt
 def add_file_context(ctx: RunContext[RouterDeps]) -> str:
+    """
+    Inject file context into the router agent's system prompt.
+    
+    Args:
+        ctx: RunContext containing file context information
+    
+    Returns:
+        System prompt string with file context information
+    """
     return (
         f"Here is the current state of the user's project library and folder structure:\n"
         f"{ctx.deps.file_context}\n\n"
@@ -62,15 +72,13 @@ def read_uploaded_paper(ctx: RunContext[RouterDeps], query: str) -> str:
         return "Error: You must provide a specific search query."
 
     try:
-        # 1. DIAGNOSTIC: Print total documents in the database
         total_docs = vector_collection.count()
         print(f"[🔎 DIAGNOSTIC] Total chunks currently sitting in ChromaDB: {total_docs}")
 
-        # 2. FIXED FILTER: Use the direct mapping instead of $eq which can cause type errors
         results = vector_collection.query(
             query_texts=[query],
             n_results=5,
-            where={"project_id": ctx.deps.project_id} # <-- Removed the $eq dictionary
+            where={"project_id": ctx.deps.project_id} 
         )
         
         num_found = len(results['documents'][0]) if results['documents'] else 0
@@ -99,7 +107,6 @@ def peer_review_claim(ctx: RunContext[RouterDeps], drafted_claim: str, source_ex
     
     deps = CriticDeps(source_excerpts=source_excerpts)
     
-    # We run the critic synchronously since the router needs the answer before it can proceed
     try:
         result = critic_agent.run_sync(drafted_claim, deps=deps)
         
@@ -113,3 +120,69 @@ def peer_review_claim(ctx: RunContext[RouterDeps], drafted_claim: str, source_ex
     except Exception as e:
         print(f"[⚠️ CRITIC ERROR] {str(e)}")
         return "Critic is unavailable. Proceed carefully and stick strictly to the text."
+    
+@router_agent.tool
+def read_project_notes(ctx: RunContext[RouterDeps]) -> str:
+    """
+    Reads the current content of the user's Co-Author Editor notes.
+    Use this if the user asks you to review what they have written so far.
+    """
+    with Session(engine) as db:
+        project = db.get(Project, ctx.deps.project_id)
+        if project and project.notes:
+            return f"CURRENT NOTES:\n{project.notes}"
+        return "The notes are currently empty."
+
+@router_agent.tool
+def append_to_notes(ctx: RunContext[RouterDeps], text_to_append: str) -> str:
+    """
+    Appends text directly to the user's Co-Author Editor.
+    Use this tool when the user explicitly asks you to 'write this down', 'save this to my notes', or 'draft a section'.
+    ALWAYS format the appended text cleanly in Markdown.
+    """
+    print(f"\n[✍️ EDITOR TOOL] Agent is writing to notes...")
+    with Session(engine) as db:
+        project = db.get(Project, ctx.deps.project_id)
+        if project:
+            current_notes = project.notes or ""
+            project.notes = current_notes + "\n\n" + text_to_append if current_notes else text_to_append
+            db.commit()
+            return "Successfully appended the text to the user's notes."
+        return "Error: Could not find project to update notes."
+    
+@router_agent.system_prompt
+def inject_workspace_context(ctx: RunContext[RouterDeps]) -> str:
+    """
+    Inject workspace context including file structure and current notes into the router agent's system prompt.
+    
+    Args:
+        ctx: RunContext containing workspace and notes information
+    
+    Returns:
+        System prompt string with workspace and notes context
+    """
+    return (
+        f"Here is the current state of the user's project library and folder structure:\n"
+        f"{ctx.deps.file_context}\n\n"
+        f"📝 CURRENT NOTES IN EDITOR:\n"
+        f"{ctx.deps.current_notes}\n\n"
+        f"Use this to understand what files exist and what the user has already written. "
+        f"If the user asks you to edit, write, or modify their notes, use the `overwrite_notes` tool."
+    )
+
+@router_agent.tool
+def overwrite_notes(ctx: RunContext[RouterDeps], new_notes_content: str) -> str:
+    """
+    Overwrites the user's Co-Author Editor notes with new content.
+    CRITICAL INSTRUCTION: This tool REPLACES the entire document. If the user asks you to "edit", "remove", 
+    or "add" a specific section, you MUST include the rest of the existing notes in `new_notes_content` 
+    so their previous work is not deleted!
+    """
+    print(f"\n[✍️ EDITOR TOOL] Agent is rewriting notes...")
+    with Session(engine) as db:
+        project = db.get(Project, ctx.deps.project_id)
+        if project:
+            project.notes = new_notes_content
+            db.commit()
+            return "Successfully updated the user's notes."
+        return "Error: Could not find project to update notes."

@@ -4,7 +4,7 @@ import { useState, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { 
   FileText, Loader2, BookOpen, PenTool, 
-  Folder as FolderIcon, ChevronRight, ChevronDown, FolderPlus, FilePlus, ArrowLeft, Trash2, Edit2 
+  Folder as FolderIcon, ChevronRight, ChevronDown, FolderPlus, FilePlus, ArrowLeft, Trash2, Edit2, Download 
 } from "lucide-react";
 import { toast } from "sonner";
 import { useAuth } from "@/context/AuthContext";
@@ -41,11 +41,16 @@ export function Workspace({ activeProjectId }: WorkspaceProps) {
   const [pdfBlobUrl, setPdfBlobUrl] = useState<string | null>(null);
   const [expandedFolders, setExpandedFolders] = useState<Set<number>>(new Set());
   const [isUploading, setIsUploading] = useState(false);
-  const [isSaving, setIsSaving] = useState(false);
+  const [saveStatus, setSaveStatus] = useState<"Saving..." | "Saved" | "">("");
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const editorTextRef = useRef(editorText);
   const [targetFolderId, setTargetFolderId] = useState<number | null>(null);
   const [dragOverTarget, setDragOverTarget] = useState<number | 'root' | null>(null);
+
+  useEffect(() => {
+    editorTextRef.current = editorText;
+  }, [editorText]);
 
   useEffect(() => {
     if (!activeProjectId || !token) return;
@@ -110,20 +115,61 @@ export function Workspace({ activeProjectId }: WorkspaceProps) {
   useEffect(() => {
     if (!activeProjectId || !token || editorText === undefined) return;
     const delayDebounceFn = setTimeout(async () => {
-      setIsSaving(true);
+      setSaveStatus("Saving...");
       try {
         await fetch(`http://127.0.0.1:8000/api/projects/${activeProjectId}/notes`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
           body: JSON.stringify({ notes: editorText }),
         });
-      } finally {
-        setIsSaving(false);
+        setSaveStatus("Saved");
+        setTimeout(() => setSaveStatus(""), 2000); // Fade out after 2 seconds
+      } catch (e) {
+        setSaveStatus("");
       }
     }, 1000);
     return () => clearTimeout(delayDebounceFn);
   }, [editorText, activeProjectId, token]);
 
+useEffect(() => {
+    const handleAgentNotesUpdate = async () => {
+      if (!activeProjectId || !token) return;
+      try {
+        const projRes = await fetch(`http://127.0.0.1:8000/api/projects`, {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        if (projRes.ok) {
+          const projects = await projRes.json();
+          const current = projects.find((p: any) => p.id.toString() === activeProjectId);
+          
+          if (current && current.notes !== undefined && current.notes !== editorTextRef.current) {
+            
+            const newText = current.notes;
+            const chunkSize = Math.max(1, Math.ceil(newText.length / 30)); 
+            let currentLength = 0;
+            
+            setEditorText(""); 
+            
+            const interval = setInterval(() => {
+              currentLength += chunkSize;
+              if (currentLength >= newText.length) {
+                setEditorText(newText); 
+                clearInterval(interval);
+                toast.success("Agent updated your notes!");
+              } else {
+                setEditorText(newText.substring(0, currentLength));
+              }
+            }, 30); 
+          }
+        }
+      } catch (e) {
+        console.error("Failed to sync notes from agent");
+      }
+    };
+
+    window.addEventListener("notesUpdated", handleAgentNotesUpdate);
+    return () => window.removeEventListener("notesUpdated", handleAgentNotesUpdate);
+  }, [activeProjectId, token]);
 
   const triggerUpload = (folderId: number | null) => {
     setTargetFolderId(folderId);
@@ -260,6 +306,20 @@ export function Workspace({ activeProjectId }: WorkspaceProps) {
     if (next.has(id)) next.delete(id);
     else next.add(id);
     setExpandedFolders(next);
+  };
+  
+  const handleDownloadNotes = () => {
+    if (!editorText) {
+      toast.error("Notes are empty!");
+      return;
+    }
+    const element = document.createElement("a");
+    const file = new Blob([editorText], {type: 'text/markdown'});
+    element.href = URL.createObjectURL(file);
+    element.download = `${projectTitle.replace(/\s+/g, '_')}_Notes.md`;
+    document.body.appendChild(element);
+    element.click();
+    document.body.removeChild(element);
   };
 
   const renderTree = (parentId: number | null, depth: number = 0) => {
@@ -442,8 +502,12 @@ export function Workspace({ activeProjectId }: WorkspaceProps) {
               <h2 className="text-sm font-semibold flex items-center gap-2 text-white truncate">
                 <PenTool className="w-4 h-4 text-purple-400 shrink-0" /> 
                 <span className="truncate">Co-Author Editor</span>
-                {isSaving && <span className="text-[10px] text-blue-400 ml-2 animate-pulse font-normal tracking-widest uppercase">Saving...</span>}
+                {saveStatus === "Saving..." && <span className="text-[10px] text-blue-400 ml-2 animate-pulse font-normal tracking-widest uppercase">Saving...</span>}
+                {saveStatus === "Saved" && <span className="text-[10px] text-green-400 ml-2 font-normal tracking-widest uppercase">Saved</span>}
               </h2>
+              <Button variant="ghost" size="icon" className="h-8 w-8 text-gray-400 hover:text-white shrink-0" onClick={handleDownloadNotes} title="Download as Markdown">
+                <Download className="w-4 h-4" />
+              </Button>
             </div>
             <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
               <textarea

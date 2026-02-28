@@ -63,6 +63,7 @@ Thumbs.db
 # Local generated data
 # database file for sqlite
 deepcite.db
+deepcite_os.db
 # chroma vector store files
 chroma_db/
 # user-uploaded PDFs and related data

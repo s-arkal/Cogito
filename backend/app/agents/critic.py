@@ -36,5 +36,8 @@ critic_agent = Agent(
 )
 
 @critic_agent.system_prompt
+
+def inject_excerpts(ctx: RunContext[CriticDeps]) -> str:
+    """Inject source excerpts into the system prompt for the critic agent."""
 def inject_excerpts(ctx: RunContext[CriticDeps]) -> str:
     return f"SOURCE EXCERPTS TO VERIFY AGAINST:\n{ctx.deps.source_excerpts}"
