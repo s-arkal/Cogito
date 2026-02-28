@@ -123,7 +123,7 @@ export function Workspace({ activeProjectId }: WorkspaceProps) {
           body: JSON.stringify({ notes: editorText }),
         });
         setSaveStatus("Saved");
-        setTimeout(() => setSaveStatus(""), 2000); // Fade out after 2 seconds
+        setTimeout(() => setSaveStatus(""), 2000); 
       } catch (e) {
         setSaveStatus("");
       }
@@ -141,7 +141,7 @@ useEffect(() => {
         if (projRes.ok) {
           const projects = await projRes.json();
           const current = projects.find((p: any) => p.id.toString() === activeProjectId);
-          
+
           if (current && current.notes !== undefined && current.notes !== editorTextRef.current) {
             
             const newText = current.notes;
