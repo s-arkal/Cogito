@@ -53,10 +53,14 @@ class Document(SQLModel, table=True):
 class Message(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     project_id: int = Field(foreign_key="project.id")
-    role: str 
+    role: str # "user" or "assistant"
     content: str
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        nullable=False
+    )
     
-    project: Optional[Project] = Relationship(back_populates="messages")
+    project: Optional["Project"] = Relationship(back_populates="messages")
 
 sqlite_file_name = "deepcite_os.db"
 sqlite_url = f"sqlite:///{sqlite_file_name}"

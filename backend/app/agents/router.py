@@ -1,27 +1,22 @@
 import os
 from dotenv import load_dotenv
+import chromadb
+from pydantic import BaseModel
 from pydantic_ai import Agent, RunContext
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.litellm import LiteLLMProvider
 from pydantic_ai.common_tools.duckduckgo import duckduckgo_search_tool
-from app.db import engine, Document
-from sqlmodel import Session, select
-from pydantic_ai import Agent, RunContext
-import chromadb
+from app.agents.critic import critic_agent, CriticDeps
 
 load_dotenv()
 
 chroma_client = chromadb.PersistentClient(path="./chroma_db")
-vector_collection = chroma_client.get_or_create_collection(name="deepcite_documents")
+vector_collection = chroma_client.get_or_create_collection(name="deepcite_vectors")
 
-document_store = {
-    "current_pdf_text": "",
-    "filename": ""
-}
-
-def set_pdf_text(filename: str, text: str):
-    document_store["filename"] = filename
-    document_store["current_pdf_text"] = text
+# NEW: We added `file_context` so the agent knows your folder structure
+class RouterDeps(BaseModel):
+    project_id: int
+    file_context: str 
 
 model = OpenAIChatModel(
     'gpt-oss-120b',
@@ -34,33 +29,87 @@ model = OpenAIChatModel(
 router_agent = Agent(
     model=model,
     tools=[duckduckgo_search_tool()],
-    deps_type=int,
+    deps_type=RouterDeps,
     system_prompt=(
         "You are DeepCite, an academic research assistant. "
         "You have access to the live web via DuckDuckGo, and you can read uploaded PDF documents. "
         "CRITICAL INSTRUCTIONS:\n"
-        "1. If the user asks about an uploaded document or paper, use the 'read_uploaded_paper' tool FIRST.\n"
-        "2. Do not use the web search tool to open URLs.\n"
-        "3. Limit web searches to 2 max per query."
+        "1. If the user asks about an uploaded document, use the 'read_uploaded_paper' tool FIRST.\n"
+        "2. Before giving your final answer to the user about a document, use the 'peer_review_claim' tool to verify your findings with the Critic.\n"
+        "3. Do not use the web search tool to open URLs.\n"
+        "4. Always cite your sources clearly."
     )
 )
 
-@router_agent.tool
-def search_uploaded_documents(ctx: RunContext[int], query: str) -> str:
-    session_id = ctx.deps
-    
-    results = vector_collection.query(
-        query_texts=[query],
-        n_results=3,
-        where={"session_id": session_id}
+# NEW: This dynamically injects your exact folder and file names into the prompt every time you chat!
+@router_agent.system_prompt
+def add_file_context(ctx: RunContext[RouterDeps]) -> str:
+    return (
+        f"Here is the current state of the user's project library and folder structure:\n"
+        f"{ctx.deps.file_context}\n\n"
+        f"Use this to understand what files exist. When searching the knowledge base, use specific queries related to these files."
     )
+
+@router_agent.tool
+def read_uploaded_paper(ctx: RunContext[RouterDeps], query: str) -> str:
+    """
+    Searches the user's uploaded documents for the given query. 
+    You MUST provide a highly specific search query. DO NOT pass an empty string.
+    """
+    print(f"\n[🤖 RAG TOOL] AI is searching for: '{query}' in Project {ctx.deps.project_id}")
     
-    if not results['documents'] or not results['documents'][0]:
-        return "No relevant information found in the uploaded documents for this session."
+    if not query or query.strip() == "":
+        return "Error: You must provide a specific search query."
+
+    try:
+        # 1. DIAGNOSTIC: Print total documents in the database
+        total_docs = vector_collection.count()
+        print(f"[🔎 DIAGNOSTIC] Total chunks currently sitting in ChromaDB: {total_docs}")
+
+        # 2. FIXED FILTER: Use the direct mapping instead of $eq which can cause type errors
+        results = vector_collection.query(
+            query_texts=[query],
+            n_results=5,
+            where={"project_id": ctx.deps.project_id} # <-- Removed the $eq dictionary
+        )
         
-    formatted_results = "Here are the most relevant excerpts from the uploaded documents:\n\n"
-    for i, doc_chunk in enumerate(results['documents'][0]):
-        source_file = results['metadatas'][0][i]['filename']
-        formatted_results += f"--- Excerpt from {source_file} ---\n{doc_chunk}\n\n"
+        num_found = len(results['documents'][0]) if results['documents'] else 0
+        print(f"[📊 CHROMA RESULTS] Found {num_found} text chunks.")
+
+        if not results['documents'] or not results['documents'][0]:
+            return "No relevant information found in the uploaded documents for this project."
+            
+        formatted_results = "Here are the most relevant excerpts from the uploaded documents:\n\n"
+        for i, doc_chunk in enumerate(results['documents'][0]):
+            source_file = results['metadatas'][0][i].get('filename', 'Unknown File')
+            formatted_results += f"--- Excerpt from {source_file} ---\n{doc_chunk}\n\n"
+            
+        return formatted_results
+    except Exception as e:
+        print(f"[❌ ERROR] ChromaDB Error: {str(e)}")
+        return f"Error searching database: {str(e)}"
+    
+@router_agent.tool
+def peer_review_claim(ctx: RunContext[RouterDeps], drafted_claim: str, source_excerpts: str) -> str:
+    """
+    Passes your drafted claim and the source excerpts to the Critic Agent for peer review.
+    ALWAYS use this tool to ensure you are not hallucinating before you stream the final answer to the user.
+    """
+    print(f"\n[🧐 CRITIC ACTIVATED] Reviewing drafted claim...")
+    
+    deps = CriticDeps(source_excerpts=source_excerpts)
+    
+    # We run the critic synchronously since the router needs the answer before it can proceed
+    try:
+        result = critic_agent.run_sync(drafted_claim, deps=deps)
         
-    return formatted_results
+        if result.output.is_supported:
+            print("[✅ CRITIC PASSED]")
+            return "Critic approved. Your claim is factually supported by the text. Proceed with this answer."
+        else:
+            print(f"[❌ CRITIC FAILED] {result.output.feedback}")
+            return f"Critic REJECTED the claim. Feedback: {result.output.feedback}. YOU MUST USE THIS CORRECTED VERSION INSTEAD: {result.output.corrected_draft}"
+            
+    except Exception as e:
+        print(f"[⚠️ CRITIC ERROR] {str(e)}")
+        return "Critic is unavailable. Proceed carefully and stick strictly to the text."

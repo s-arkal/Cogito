@@ -2,11 +2,13 @@ import json
 import io
 import os
 import chromadb
+import json
+import shutil
 
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, UploadFile, File, Depends, Form, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.security import OAuth2PasswordRequestForm
 from sse_starlette.sse import EventSourceResponse
 from PyPDF2 import PdfReader
@@ -17,13 +19,14 @@ from datetime import timedelta, datetime, timezone
 
 from app.auth import get_password_hash, verify_password, create_access_token, get_current_user, ACCESS_TOKEN_EXPIRE_MINUTES
 from app.db import create_db_and_tables, get_session, User, Project, Folder, Document, Message, engine
-from app.agents.router import router_agent
+from app.agents.librarian import librarian_agent, LibrarianDeps
+from app.agents.router import router_agent, RouterDeps
 
 UPLOAD_DIR = "uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 chroma_client = chromadb.PersistentClient(path="./chroma_db")
-vector_collection = chroma_client.get_or_create_collection(name="deepcite_documents")
+vector_collection = chroma_client.get_or_create_collection(name="deepcite_vectors")
 
 def chunk_text(text: str, chunk_size: int = 1000, overlap: int = 200):
     chunks = []
@@ -316,37 +319,55 @@ def delete_folder(project_id: int, folder_id: int, db: Session = Depends(get_ses
     return {"success": True}
 
 @app.post("/api/projects/{project_id}/upload")
-async def upload_pdf(project_id: int, file: UploadFile = File(...), folder_id: Optional[int] = Form(None), db: Session = Depends(get_session), current_user: User = Depends(get_current_user)):
+def upload_pdf(
+    project_id: int, 
+    file: UploadFile = File(...), 
+    folder_id: Optional[int] = Form(None), # <-- THIS IS THE MISSING LINK!
+    db: Session = Depends(get_session), 
+    current_user: User = Depends(get_current_user)
+):
+    """Uploads a PDF, extracts text, saves to SQLite, and chunks into ChromaDB."""
+    # 1. Verify Project
     project = db.get(Project, project_id)
     if not project or project.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Project not found")
 
+    # 2. Save physical file
+    safe_filename = file.filename.replace(" ", "_")
+    file_path = os.path.join(UPLOAD_DIR, f"proj_{project_id}_{safe_filename}")
+    
+    with open(file_path, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+
+    # 3. Extract Text
     try:
-        file_content = await file.read()
-        safe_filename = file.filename.replace(" ", "_")
-        unique_file_id = f"proj_{project_id}_{safe_filename}"
-        file_path = os.path.join(UPLOAD_DIR, unique_file_id)
-        
-        with open(file_path, "wb") as f:
-            f.write(file_content)
+        reader = PdfReader(file_path)
+        text = "".join(page.extract_text() for page in reader.pages if page.extract_text())
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to read PDF text: {str(e)}")
+    
+    doc = Document(
+        project_id=project_id, 
+        folder_id=folder_id,
+        filename=safe_filename, 
+        content=text, 
+        source="local",
+        uploaded_at=datetime.now(timezone.utc) # <-- THIS FIXES THE CRASH!
+    )
+    db.add(doc)
+    db.commit()
+    db.refresh(doc)
 
-        pdf = PdfReader(io.BytesIO(file_content))
-        text = "".join([page.extract_text() or "" for page in pdf.pages])
-                
-        doc = Document(project_id=project_id, folder_id=folder_id, filename=safe_filename, content=text, source="local")
-        db.add(doc)
-        db.commit()
-        db.refresh(doc)
-
-        chunks = chunk_text(text)
+    # 5. Chunk and load into ChromaDB (AI visibility)
+    chunks = chunk_text(text)
+    
+    # Safety check: Only add to Chroma if we actually extracted text!
+    if chunks: 
         chunk_ids = [f"doc_proj_{project_id}_{safe_filename}_{i}" for i in range(len(chunks))]
         metadatas = [{"project_id": project_id, "user_id": current_user.id, "filename": safe_filename} for _ in chunks]
-        
         vector_collection.add(documents=chunks, metadatas=metadatas, ids=chunk_ids)
-        
-        return {"success": True, "filename": safe_filename, "id": doc.id}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+
+    return {"success": True, "filename": safe_filename, "id": doc.id}
 
 @app.get("/api/projects/{project_id}/documents")
 def get_documents(project_id: int, db: Session = Depends(get_session), current_user: User = Depends(get_current_user)):
@@ -423,37 +444,103 @@ def delete_document(
 
 @app.post("/api/chat")
 async def chat_endpoint(request: ChatRequest, db: Session = Depends(get_session), current_user: User = Depends(get_current_user)):
+    # 1. Verify Project
     project = db.get(Project, request.project_id)
     if not project or project.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Project not found")
 
-    user_msg = Message(project_id=request.project_id, role="user", content=request.message)
+    # 2. Build the Dynamic Recursive Folder & File Context Map
+    docs = db.exec(select(Document).where(Document.project_id == request.project_id)).all()
+    folders = db.exec(select(Folder).where(Folder.project_id == request.project_id)).all()
+
+    # We build a visual tree so the LLM knows EXACTLY where everything is nested
+    def build_tree_context(parent_id: int | None, depth: int) -> str:
+        context = ""
+        padding = "    " * depth
+        
+        # 1. Find and append folders at this level
+        child_folders = [f for f in folders if f.parent_id == parent_id]
+        for f in child_folders:
+            context += f"{padding}📁 {f.name}/\n"
+            context += build_tree_context(f.id, depth + 1) # Recurse deeper!
+
+        # 2. Find and append documents at this level
+        child_docs = [d for d in docs if d.folder_id == parent_id]
+        for d in child_docs:
+            context += f"{padding}📄 {d.filename}\n"
+            
+        return context
+
+    file_context = "Project Workspace (Root)/\n"
+    file_context += build_tree_context(None, 1)
+    
+    # Handle completely empty projects
+    if not docs and not folders:
+        file_context += "    (Empty Workspace - No folders or files yet)\n"
+
+    # 3. Save User Message
+    user_msg = Message(
+        project_id=request.project_id, 
+        role="user", 
+        content=request.message,
+        created_at=datetime.now(timezone.utc)
+    )
     db.add(user_msg)
     db.commit()
 
-    async def event_generator():
+    # 4. Stream AI Response using LIVE Events
+    async def ai_streamer():
+        full_response = ""
+        # The agent now gets the PERFECT file tree injected into its brain
+        deps = RouterDeps(project_id=request.project_id, file_context=file_context)
+        
         try:
-            assistant_content = ""
-            async for event in router_agent.run_stream_events(request.message, deps=request.project_id):
-                from pydantic_ai.messages import TextPartDelta, PartDeltaEvent, PartStartEvent
-                
-                if isinstance(event, PartDeltaEvent):
-                    if isinstance(event.delta, TextPartDelta):
-                        assistant_content += event.delta.content_delta
-                        yield {"data": json.dumps({"type": "text", "data": event.delta.content_delta})}
-                elif isinstance(event, PartStartEvent):
-                    if hasattr(event.part, 'tool_name'):
-                        yield {"data": json.dumps({"type": "status", "data": f"DeepCite using {event.part.tool_name}..."})}
+            yield f"data: {json.dumps({'type': 'status', 'data': 'DeepCite is analyzing project context...'})}\n\n"
+            
+            # Catch tool calls live
+            if hasattr(router_agent, "run_stream_events"):
+                async for event in router_agent.run_stream_events(request.message, deps=deps):
+                    event_name = type(event).__name__
+                    
+                    if event_name == "PartStartEvent":
+                        if hasattr(event, "part") and type(event.part).__name__ == "ToolCallPart":
+                            t_name = getattr(event.part, "tool_name", "")
+                            if t_name == "read_uploaded_paper":
+                                yield f"data: {json.dumps({'type': 'status', 'data': 'Searching Document Library...'})}\n\n"
+                            elif "duckduckgo" in t_name:
+                                yield f"data: {json.dumps({'type': 'status', 'data': 'Searching DuckDuckGo Web...'})}\n\n"
+                                
+                    elif event_name == "PartDeltaEvent":
+                        if hasattr(event, "delta") and type(event.delta).__name__ == "TextPartDelta":
+                            chunk = getattr(event.delta, "content_delta", "")
+                            if chunk:
+                                if not full_response:
+                                    yield f"data: {json.dumps({'type': 'status', 'data': ''})}\n\n"
+                                full_response += chunk
+                                yield f"data: {json.dumps({'type': 'text', 'data': chunk})}\n\n"
+            else:
+                async with router_agent.run_stream(request.message, deps=deps) as result:
+                    async for chunk in result.stream_text(delta=True):
+                        if not full_response:
+                            yield f"data: {json.dumps({'type': 'status', 'data': ''})}\n\n"
+                        full_response += chunk
+                        yield f"data: {json.dumps({'type': 'text', 'data': chunk})}\n\n"
 
-            if assistant_content:
-                with Session(engine) as stream_db:
-                    ai_msg = Message(project_id=request.project_id, role="synthesizer", content=assistant_content)
-                    stream_db.add(ai_msg)
-                    stream_db.commit()
+            # Save final message
+            assistant_msg = Message(
+                project_id=request.project_id, 
+                role="assistant", 
+                content=full_response,
+                created_at=datetime.now(timezone.utc)
+            )
+            db.add(assistant_msg)
+            db.commit()
+            
         except Exception as e:
-            yield {"data": json.dumps({"type": "text", "data": f"\n**Error:** {str(e)}"})}
+            error_msg = f"Agent Error: {str(e)}"
+            yield f"data: {json.dumps({'type': 'text', 'data': error_msg})}\n\n"
 
-    return EventSourceResponse(event_generator())
+    return StreamingResponse(ai_streamer(), media_type="text/event-stream")
 
 @app.get("/api/projects/{project_id}/messages")
 def get_project_messages(project_id: int, db: Session = Depends(get_session), current_user: User = Depends(get_current_user)):
