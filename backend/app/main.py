@@ -23,7 +23,7 @@ UPLOAD_DIR = "uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 chroma_client = chromadb.PersistentClient(path="./chroma_db")
-vector_collection = chroma_client.get_or_create_collection(name="deepcite_documents")
+vector_collection = chroma_client.get_or_create_collection(name="cogito_documents")
 
 def chunk_text(text: str, chunk_size: int = 1000, overlap: int = 200):
     chunks = []
@@ -443,7 +443,7 @@ async def chat_endpoint(request: ChatRequest, db: Session = Depends(get_session)
                         yield {"data": json.dumps({"type": "text", "data": event.delta.content_delta})}
                 elif isinstance(event, PartStartEvent):
                     if hasattr(event.part, 'tool_name'):
-                        yield {"data": json.dumps({"type": "status", "data": f"DeepCite using {event.part.tool_name}..."})}
+                        yield {"data": json.dumps({"type": "status", "data": f"Cogito using {event.part.tool_name}..."})}
 
             if assistant_content:
                 with Session(engine) as stream_db:

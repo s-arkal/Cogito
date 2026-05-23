@@ -42,7 +42,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   useEffect(() => {
-    const savedToken = localStorage.getItem("deepcite_token");
+    const savedToken = localStorage.getItem("cogito_token");
     if (savedToken) {
       setToken(savedToken);
       fetchUser(savedToken);
@@ -51,14 +51,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const login = (newToken: string) => {
-    localStorage.setItem("deepcite_token", newToken);
+    localStorage.setItem("cogito_token", newToken);
     setToken(newToken);
     fetchUser(newToken); 
     router.push("/");
   };
 
   const logout = () => {
-    localStorage.removeItem("deepcite_token");
+    localStorage.removeItem("cogito_token");
     setToken(null);
     setUser(null);
     router.push("/login");

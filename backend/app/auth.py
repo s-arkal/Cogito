@@ -8,7 +8,7 @@ from fastapi.security import OAuth2PasswordBearer
 from sqlmodel import Session, select
 from app.db import get_session, User
 
-SECRET_KEY = "super-secret-deepcite-os-key-change-me" 
+SECRET_KEY = "super-secret-cogito-os-key-change-me" 
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 7 Days
 

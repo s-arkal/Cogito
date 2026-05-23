@@ -38,7 +38,7 @@ export default function LoginPage() {
       const data = await res.json();
 
       if (res.ok) {
-        toast.success(isLogin ? "Welcome back to DeepCite" : "Account created successfully");
+        toast.success(isLogin ? "Welcome back to Cogito" : "Account created successfully");
         login(data.access_token);
       } else {
         toast.error(data.detail || "Authentication failed");
@@ -60,7 +60,7 @@ export default function LoginPage() {
           <div className="w-12 h-12 bg-white/5 border border-white/10 rounded-xl flex items-center justify-center mb-4 shadow-inner">
             <BookOpen className="w-6 h-6 text-gray-300" />
           </div>
-          <h1 className="text-2xl font-serif text-gray-100 tracking-tight">DeepCite OS</h1>
+          <h1 className="text-2xl font-serif text-gray-100 tracking-tight">Cogito OS</h1>
           <p className="text-sm text-gray-400 mt-2 text-center">
             The Multi-Agent Research Operating System.
           </p>

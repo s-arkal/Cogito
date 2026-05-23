@@ -1,6 +1,6 @@
-# DeepCite 🧠📄
+# Cogito 🧠📄
 
-DeepCite is an AI-powered academic research assistant featuring a dynamic, split-pane workspace. It combines a conversational AI orchestrator, real-time web search capabilities, Retrieval-Augmented Generation (RAG) for PDF analysis, and a live LaTeX/Markdown editor into a single, seamless application.
+Cogito is an AI-powered academic research assistant featuring a dynamic, split-pane workspace. It combines a conversational AI orchestrator, real-time web search capabilities, Retrieval-Augmented Generation (RAG) for PDF analysis, and a live LaTeX/Markdown editor into a single, seamless application.
 
 ## ✨ Key Features
 

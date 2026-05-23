@@ -12,7 +12,7 @@ import chromadb
 load_dotenv()
 
 chroma_client = chromadb.PersistentClient(path="./chroma_db")
-vector_collection = chroma_client.get_or_create_collection(name="deepcite_documents")
+vector_collection = chroma_client.get_or_create_collection(name="cogito_documents")
 
 document_store = {
     "current_pdf_text": "",
@@ -36,7 +36,7 @@ router_agent = Agent(
     tools=[duckduckgo_search_tool()],
     deps_type=int,
     system_prompt=(
-        "You are DeepCite, an academic research assistant. "
+        "You are Cogito, an academic research assistant. "
         "You have access to the live web via DuckDuckGo, and you can read uploaded PDF documents. "
         "CRITICAL INSTRUCTIONS:\n"
         "1. If the user asks about an uploaded document or paper, use the 'read_uploaded_paper' tool FIRST.\n"

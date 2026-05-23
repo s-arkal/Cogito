@@ -15,7 +15,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "DeepCite OS",
+  title: "Cogito OS",
   description: "The Multi-Agent Research Operating System",
 };
 
